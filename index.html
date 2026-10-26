@@ -1,0 +1,1069 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#05060a" />
+<title>Orbital — hand-tracked particle sphere</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#e9ecf3;
+    --muted:#7c8497;
+    --line:rgba(255,255,255,.14);
+    --mono:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:#05060a; color:var(--ink); overflow:hidden;
+    font-family:var(--mono);
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    touch-action:none; overscroll-behavior:none;
+  }
+  #bg{
+    position:fixed; inset:0; z-index:0;
+    background:
+      radial-gradient(ellipse 70% 60% at 50% 42%, #12161f 0%, #0a0c13 42%, #04050a 100%);
+  }
+  #cam{
+    position:fixed; inset:0; width:100%; height:100%; object-fit:cover;
+    transform:scaleX(-1); opacity:0; z-index:1;
+    transition:opacity .7s ease;
+    filter:saturate(.7) contrast(1.04) brightness(.95);
+  }
+  body.cambg #cam{opacity:.6}
+  #vignette{
+    position:fixed; inset:0; z-index:2; pointer-events:none;
+    background:radial-gradient(ellipse 78% 72% at 50% 45%, rgba(4,5,10,0) 34%, rgba(4,5,10,.62) 100%);
+    transition:opacity .7s ease;
+  }
+  body.cambg #vignette{
+    background:radial-gradient(ellipse 78% 72% at 50% 45%, rgba(4,5,10,.10) 30%, rgba(4,5,10,.72) 100%);
+  }
+  canvas#gl{
+    position:fixed; inset:0; width:100%; height:100%; z-index:3; display:block;
+  }
+
+  /* ---------- chrome ---------- */
+  header{
+    position:fixed; top:0; left:0; z-index:5; padding:34px 38px;
+    pointer-events:none;
+  }
+  h1{
+    font-family:'Instrument Serif', Georgia, 'Times New Roman', serif;
+    font-weight:400; font-size:clamp(30px, 3.4vw, 46px);
+    line-height:1; margin:0; letter-spacing:.005em; color:#f5f6fa;
+  }
+  h1 em{font-style:italic; color:#c9d2e6}
+  .sub{
+    margin-top:11px; font-size:10.5px; letter-spacing:.24em;
+    text-transform:uppercase; color:var(--muted);
+  }
+
+  #hud{
+    position:fixed; top:36px; right:38px; z-index:5;
+    display:grid; grid-template-columns:auto auto; gap:6px 18px;
+    font-size:10.5px; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--muted); text-align:right; pointer-events:none;
+  }
+  #hud b{color:#dfe5f2; font-weight:400; font-variant-numeric:tabular-nums}
+  #hud .st{grid-column:1 / -1; color:#8ea0c4; letter-spacing:.14em; padding-top:4px}
+
+  #camBtn{
+    position:fixed; right:34px; bottom:32px; z-index:6;
+    display:inline-flex; align-items:center; gap:10px;
+    padding:13px 20px; border-radius:999px;
+    background:rgba(18,21,29,.72);
+    border:1px solid var(--line);
+    color:#dfe4ee; cursor:pointer;
+    font:400 10.5px/1 var(--mono); letter-spacing:.18em; text-transform:uppercase;
+    transition:background .25s, border-color .25s, opacity .25s;
+  }
+  #camBtn .dot{
+    width:6px; height:6px; border-radius:50%;
+    background:#4a5165; transition:background .25s, box-shadow .25s;
+  }
+  #camBtn:hover:not(:disabled){background:rgba(255,255,255,.1); border-color:rgba(255,255,255,.3)}
+  #camBtn:disabled{opacity:.32; cursor:not-allowed}
+  body.cambg #camBtn .dot{background:#7ee7ff; box-shadow:0 0 10px #7ee7ff}
+
+  #hints{
+    position:fixed; left:38px; bottom:34px; z-index:5; pointer-events:none;
+    display:flex; flex-direction:column; gap:7px;
+    font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:#5f6879;
+    transition:opacity 1.2s ease; max-width:42vw;
+  }
+  #hints b{color:#9aa6bd; font-weight:400}
+  #hints.fade{opacity:.18}
+
+  /* ---------- charge ring ---------- */
+  #ringWrap{
+    position:fixed; left:0; top:0; width:132px; height:132px;
+    margin:-66px 0 0 -66px; z-index:4; pointer-events:none;
+    opacity:0; transition:opacity .16s ease;
+    will-change:transform;
+  }
+  #ringWrap.on{opacity:1}
+  #ringWrap svg{display:block; width:132px; height:132px; overflow:visible}
+  #ringWrap .halo{
+    position:absolute; inset:0; border-radius:50%;
+    background:radial-gradient(circle, rgba(140,190,255,.16) 0%, rgba(140,190,255,0) 62%);
+    opacity:0; transition:opacity .2s;
+  }
+  #ringWrap.full .halo{opacity:1}
+  #ringWrap.full{animation:pulse .9s ease-in-out infinite}
+  @keyframes pulse{
+    0%,100%{filter:none}
+    50%{filter:drop-shadow(0 0 14px rgba(150,200,255,.65))}
+  }
+
+  /* ---------- intro ---------- */
+  #intro{
+    position:fixed; inset:0; z-index:9;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(4,5,10,.62);
+    -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px);
+    transition:opacity .55s ease, visibility .55s;
+    padding:24px;
+  }
+  #intro.hidden{opacity:0; visibility:hidden; pointer-events:none}
+  #intro .card{max-width:470px; text-align:center}
+  #intro .eyebrow{
+    font-size:10px; letter-spacing:.3em; text-transform:uppercase; color:#6d7688; margin-bottom:18px;
+  }
+  #intro h2{
+    font-family:'Instrument Serif', Georgia, serif; font-weight:400;
+    font-size:clamp(34px,5vw,54px); line-height:1.06; margin:0 0 16px; color:#f6f7fb;
+    text-wrap:balance;
+  }
+  #intro p{
+    font-family:Georgia,'Times New Roman',serif; font-size:15.5px; line-height:1.65;
+    color:#a8b0c2; margin:0 0 30px;
+  }
+  #intro .row{display:flex; gap:12px; justify-content:center; flex-wrap:wrap}
+  #intro button{
+    font:400 10.5px/1 var(--mono); letter-spacing:.18em; text-transform:uppercase;
+    padding:15px 24px; border-radius:999px; cursor:pointer;
+    transition:background .25s, border-color .25s, color .25s;
+  }
+  #intro .primary{
+    background:#eef1f8; color:#0a0c12; border:1px solid #eef1f8;
+  }
+  #intro .primary:hover{background:#fff; border-color:#fff}
+  #intro .ghost{
+    background:transparent; color:#9aa4b8; border:1px solid var(--line);
+  }
+  #intro .ghost:hover{color:#dfe4ee; border-color:rgba(255,255,255,.32)}
+  #intro .fine{
+    margin-top:26px; font-family:var(--mono); font-size:9.5px; line-height:1.8;
+    letter-spacing:.1em; color:#4f5768; text-transform:uppercase; text-wrap:balance;
+  }
+
+  #toast{
+    position:fixed; left:50%; bottom:92px; transform:translateX(-50%) translateY(8px);
+    z-index:7; padding:11px 18px; border-radius:999px;
+    background:rgba(16,19,27,.9); border:1px solid var(--line);
+    font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:#c3cbdb;
+    opacity:0; pointer-events:none; transition:opacity .4s, transform .4s;
+    max-width:80vw; text-align:center;
+  }
+  #toast.on{opacity:1; transform:translateX(-50%) translateY(0)}
+
+  #fallback{
+    position:fixed; inset:0; z-index:10; display:none;
+    align-items:center; justify-content:center; text-align:center;
+    font-family:Georgia, serif; font-size:16px; color:#98a1b4; padding:30px;
+    background:#05060a;
+  }
+  @media (max-width:640px){
+    header{padding:22px 22px}
+    #hud{top:24px; right:22px; font-size:9.5px; gap:4px 12px}
+    #hints{left:22px; bottom:26px; max-width:60vw; font-size:9px}
+    #camBtn{right:20px; bottom:22px; padding:12px 16px}
+  }
+</style>
+</head>
+<body>
+  <div id="bg"></div>
+  <video id="cam" playsinline muted autoplay></video>
+  <div id="vignette"></div>
+  <canvas id="gl"></canvas>
+
+  <div id="ringWrap">
+    <div class="halo"></div>
+    <svg viewBox="0 0 132 132" aria-hidden="true">
+      <defs>
+        <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#7ee7ff"/>
+          <stop offset="55%" stop-color="#9db4ff"/>
+          <stop offset="100%" stop-color="#c58cff"/>
+        </linearGradient>
+      </defs>
+      <circle cx="66" cy="66" r="54" fill="none" stroke="rgba(255,255,255,.09)" stroke-width="1.5"/>
+      <circle id="ringArc" cx="66" cy="66" r="54" fill="none" stroke="url(#ringGrad)"
+              stroke-width="3" stroke-linecap="round"
+              transform="rotate(-90 66 66)"
+              stroke-dasharray="339.29" stroke-dashoffset="339.29"/>
+    </svg>
+  </div>
+
+  <header>
+    <h1>Orbital<em>.</em></h1>
+    <div class="sub">3,000 particles · hand tracked</div>
+  </header>
+
+  <div id="hud">
+    <span>hands</span><b id="hHands">0</b>
+    <span>fingers</span><b id="hFingers">—</b>
+    <span>charge</span><b id="hCharge">0%</b>
+    <div class="st" id="hState">idle</div>
+  </div>
+
+  <div id="hints">
+    <span><b>one hand</b> — move &amp; rotate</span>
+    <span><b>pinch &amp; hold</b> — charge, release to shatter</span>
+    <span><b>two hands</b> — spread to grow, close to shrink</span>
+    <span><b>finger count</b> — colour</span>
+  </div>
+
+  <button id="camBtn" disabled>
+    <span class="dot"></span><span id="camBtnLabel">Webcam background</span>
+  </button>
+
+  <div id="toast"></div>
+
+  <div id="intro">
+    <div class="card">
+      <div class="eyebrow">real-time hand tracking</div>
+      <h2>A sphere in your hand</h2>
+      <p>Three thousand particles, moved by your hand through the webcam. Pinch to charge, release to shatter, then watch them fall back into place.</p>
+      <div class="row">
+        <button id="startBtn" class="primary">Enable camera</button>
+        <button id="skipBtn" class="ghost">Use pointer</button>
+      </div>
+      <div class="fine">Video never leaves your device — all tracking runs locally in this page.</div>
+    </div>
+  </div>
+
+  <div id="fallback">WebGL isn’t available in this browser, so the particle sphere can’t be rendered.</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+<script>
+(function () {
+  'use strict';
+
+  /* =======================================================================
+     Setup
+     ======================================================================= */
+  var canvas = document.getElementById('gl');
+  var video = document.getElementById('cam');
+  var ringWrap = document.getElementById('ringWrap');
+  var ringArc = document.getElementById('ringArc');
+  var toastEl = document.getElementById('toast');
+  var camBtn = document.getElementById('camBtn');
+  var camBtnLabel = document.getElementById('camBtnLabel');
+  var intro = document.getElementById('intro');
+  var hints = document.getElementById('hints');
+
+  var gl = null;
+  try {
+    gl = canvas.getContext('webgl', {
+      alpha: true, antialias: true, premultipliedAlpha: false,
+      depth: false, powerPreference: 'high-performance'
+    }) || canvas.getContext('experimental-webgl', { alpha: true, antialias: true });
+  } catch (e) { gl = null; }
+
+  if (!gl) {
+    document.getElementById('fallback').style.display = 'flex';
+    intro.style.display = 'none';
+    return;
+  }
+
+  /* =======================================================================
+     Particle field — 3000 points on a fibonacci sphere
+     ======================================================================= */
+  var N = 3000;
+  var R0 = 1.55;
+  var P = new Array(N);
+  var GOLDEN = Math.PI * (3 - Math.sqrt(5));
+
+  for (var i = 0; i < N; i++) {
+    var t = (i + 0.5) / N;
+    var y = 1 - 2 * t;
+    var rad = Math.sqrt(Math.max(0, 1 - y * y));
+    var phi = i * GOLDEN;
+    var dx = Math.cos(phi) * rad, dy = y, dz = Math.sin(phi) * rad;
+    var shell = 0.93 + Math.random() * 0.14;
+    P[i] = {
+      dx: dx, dy: dy, dz: dz,
+      rr: shell,
+      px: dx * R0 * shell, py: dy * R0 * shell, pz: dz * R0 * shell,
+      vx: 0, vy: 0, vz: 0,
+      ph: Math.random() * Math.PI * 2,
+      seed: Math.random(),
+      size: 0.036 + Math.pow(Math.random(), 2.0) * 0.072,
+      cr: 0.45, cg: 0.8, cb: 1.0
+    };
+  }
+
+  var PALETTE = [
+    [0.42, 0.90, 1.00],  // 0 — cyan
+    [0.50, 0.62, 1.00],  // 1 — blue
+    [0.72, 0.55, 1.00],  // 2 — violet
+    [1.00, 0.52, 0.85],  // 3 — pink
+    [1.00, 0.68, 0.42],  // 4 — amber
+    [0.64, 1.00, 0.62]   // 5 — mint
+  ];
+
+  /* =======================================================================
+     WebGL program
+     ======================================================================= */
+  var VS = [
+    'attribute vec3 aPos;',
+    'attribute vec3 aCol;',
+    'attribute float aSize;',
+    'uniform mat4 uProj;',
+    'uniform mat4 uView;',
+    'uniform mat4 uModel;',
+    'uniform float uSizeScale;',
+    'varying vec3 vCol;',
+    'varying float vA;',
+    'void main(){',
+    '  vec4 world = uModel * vec4(aPos, 1.0);',
+    '  vec4 view = uView * world;',
+    '  gl_Position = uProj * view;',
+    '  float d = -view.z;',
+    '  float ps = uSizeScale * aSize / max(d, 1.0);',
+    '  gl_PointSize = clamp(ps, 1.0, 96.0);',
+    '  vA = clamp(1.6 - d / 28.0, 0.10, 1.0);',
+    '  if (d < 0.45) { gl_PointSize = 0.0; vA = 0.0; }',
+    '  vCol = aCol;',
+    '}'
+  ].join('\n');
+
+  var FS = [
+    'precision mediump float;',
+    'varying vec3 vCol;',
+    'varying float vA;',
+    'void main(){',
+    '  vec2 c = gl_PointCoord - vec2(0.5);',
+    '  float r = length(c) * 2.0;',
+    '  if (r > 1.0) discard;',
+    '  float a = pow(1.0 - r, 2.05);',
+    '  gl_FragColor = vec4(vCol, a * vA);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('shader:', gl.getShaderInfoLog(s));
+      return null;
+    }
+    return s;
+  }
+
+  var vs = compile(gl.VERTEX_SHADER, VS);
+  var fs = compile(gl.FRAGMENT_SHADER, FS);
+  var prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('link:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var aPos = gl.getAttribLocation(prog, 'aPos');
+  var aCol = gl.getAttribLocation(prog, 'aCol');
+  var aSize = gl.getAttribLocation(prog, 'aSize');
+  var uProj = gl.getUniformLocation(prog, 'uProj');
+  var uView = gl.getUniformLocation(prog, 'uView');
+  var uModel = gl.getUniformLocation(prog, 'uModel');
+  var uSizeScale = gl.getUniformLocation(prog, 'uSizeScale');
+
+  var posArr = new Float32Array(N * 3);
+  var colArr = new Float32Array(N * 3);
+  var sizeArr = new Float32Array(N);
+  for (var k = 0; k < N; k++) {
+    posArr[k * 3] = P[k].px;
+    posArr[k * 3 + 1] = P[k].py;
+    posArr[k * 3 + 2] = P[k].pz;
+    colArr[k * 3] = P[k].cr;
+    colArr[k * 3 + 1] = P[k].cg;
+    colArr[k * 3 + 2] = P[k].cb;
+    sizeArr[k] = P[k].size;
+  }
+
+  var posBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, posArr, gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+
+  var colBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, colArr, gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(aCol);
+  gl.vertexAttribPointer(aCol, 3, gl.FLOAT, false, 0, 0);
+
+  var sizeBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, sizeBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, sizeArr, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(aSize);
+  gl.vertexAttribPointer(aSize, 1, gl.FLOAT, false, 0, 0);
+
+  /* =======================================================================
+     Matrices
+     ======================================================================= */
+  var FOV = 45 * Math.PI / 180;
+  var CAM_Z = 6.6;
+  var projMat = new Float32Array(16);
+  var viewMat = new Float32Array(16);
+  var modelMat = new Float32Array(16);
+
+  function perspective(out, fovy, aspect, near, far) {
+    var f = 1 / Math.tan(fovy / 2);
+    var nf = 1 / (near - far);
+    out[0] = f / aspect; out[1] = 0; out[2] = 0; out[3] = 0;
+    out[4] = 0; out[5] = f; out[6] = 0; out[7] = 0;
+    out[8] = 0; out[9] = 0; out[10] = (far + near) * nf; out[11] = -1;
+    out[12] = 0; out[13] = 0; out[14] = 2 * far * near * nf; out[15] = 0;
+  }
+
+  function lookAt(out, eye, center, up) {
+    var zx = eye[0] - center[0], zy = eye[1] - center[1], zz = eye[2] - center[2];
+    var l = Math.hypot(zx, zy, zz) || 1; zx /= l; zy /= l; zz /= l;
+    var xx = up[1] * zz - up[2] * zy, xy = up[2] * zx - up[0] * zz, xz = up[0] * zy - up[1] * zx;
+    l = Math.hypot(xx, xy, xz) || 1; xx /= l; xy /= l; xz /= l;
+    var yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+    out[0] = xx; out[1] = yx; out[2] = zx; out[3] = 0;
+    out[4] = xy; out[5] = yy; out[6] = zy; out[7] = 0;
+    out[8] = xz; out[9] = yz; out[10] = zz; out[11] = 0;
+    out[12] = -(xx * eye[0] + xy * eye[1] + xz * eye[2]);
+    out[13] = -(yx * eye[0] + yy * eye[1] + yz * eye[2]);
+    out[14] = -(zx * eye[0] + zy * eye[1] + zz * eye[2]);
+    out[15] = 1;
+  }
+
+  lookAt(viewMat, [0, 0, CAM_Z], [0, 0, 0], [0, 1, 0]);
+
+  var dpr = 1, W = 1, H = 1, focal = 1000;
+
+  var dprCap = 2;    // lowered to 1 on slow machines, never raised again
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, dprCap);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    perspective(projMat, FOV, W / Math.max(H, 1), 0.1, 100);
+    focal = canvas.height / (2 * Math.tan(FOV / 2));
+    gl.uniformMatrix4fv(uProj, false, projMat);
+    gl.uniform1f(uSizeScale, focal);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  /* =======================================================================
+     State
+     ======================================================================= */
+  var S = {
+    radius: R0, radiusTarget: R0,
+    pos: [0, 0, 0], posTarget: [0, 0, 0],
+    yaw: 0, pitch: 0, avY: 0, avX: 0,
+    charge: 0, pinching: false,
+    mode: 'sphere', explodeT: -10, explodeDur: 0.85,
+    fingers: 2, fingersF: 2,
+    hands: 0,
+    camOn: false, camBg: false,
+    lastPalm: null,
+    lastHandT: -10,
+    handData: null,
+    hadHand: false,
+    pointerActive: false, pointerArmed: false, pointerDown: false,
+    pointer: { x: 0.5, y: 0.5 },
+    status: 'idle',
+    startT: performance.now() / 1000
+  };
+
+  /* =======================================================================
+     Helpers
+     ======================================================================= */
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('on');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { toastEl.classList.remove('on'); }, 3200);
+  }
+
+  // map a normalized video coordinate (0..1, raw / un-mirrored) to screen pixels,
+  // accounting for object-fit: cover and the mirrored display
+  function videoToScreen(nx, ny) {
+    var vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
+    var scale = Math.max(W / vw, H / vh);
+    var dw = vw * scale, dh = vh * scale;
+    var ox = (W - dw) / 2, oy = (H - dh) / 2;
+    return [ox + (1 - nx) * dw, oy + ny * dh];
+  }
+
+  function d3(a, b) {
+    var dx = a.x - b.x, dy = a.y - b.y, dz = (a.z || 0) - (b.z || 0);
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+  }
+
+  // A finger counts as extended when it is straight at the PIP joint AND its
+  // tip sits further from the wrist than its knuckle. Both tests are angles and
+  // distances, so they hold up when the hand is tilted, unlike the usual
+  // "tip above pip" rule.
+  function countFingers(lm) {
+    var n = 0;
+    var chains = [[5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]];
+    for (var i = 0; i < chains.length; i++) {
+      var c = chains[i];
+      var mcp = lm[c[0]], pip = lm[c[1]], tip = lm[c[3]];
+      var v1x = tip.x - pip.x, v1y = tip.y - pip.y, v1z = (tip.z || 0) - (pip.z || 0);
+      var v2x = pip.x - mcp.x, v2y = pip.y - mcp.y, v2z = (pip.z || 0) - (mcp.z || 0);
+      var l1 = Math.sqrt(v1x * v1x + v1y * v1y + v1z * v1z);
+      var l2 = Math.sqrt(v2x * v2x + v2y * v2y + v2z * v2z);
+      if (l1 < 1e-6 || l2 < 1e-6) continue;
+      var bend = (v1x * v2x + v1y * v2y + v1z * v2z) / (l1 * l2); // cos at the PIP
+      if (bend > 0.45 && d3(tip, lm[0]) > d3(mcp, lm[0]) * 1.05) n++;
+    }
+    // thumb: tip carried away from the pinky knuckle means it is opened out
+    if (d3(lm[4], lm[17]) > d3(lm[2], lm[17]) * 1.06) n++;
+    return clamp(n, 0, 5);
+  }
+
+  /* =======================================================================
+     Explosion
+     ======================================================================= */
+  function explode(power) {
+    power = clamp(power, 0.3, 1);
+    S.mode = 'explode';
+    S.explodeT = performance.now() / 1000;
+    S.explodeDur = 0.72 + power * 0.26;
+
+    for (var i = 0; i < N; i++) {
+      var p = P[i];
+      var l = Math.hypot(p.px, p.py, p.pz) || 1;
+      var nx = p.px / l, ny = p.py / l, nz = p.pz / l;
+      var s = (2.0 + Math.random() * 4.2) * (0.55 + power);
+      p.vx = nx * s + (Math.random() - 0.5) * 2.4;
+      p.vy = ny * s + (Math.random() - 0.5) * 2.4;
+      p.vz = nz * s + (Math.random() - 0.5) * 2.4;
+      if (Math.random() < 0.44) {
+        // a good share rush the camera so the burst fills the screen
+        p.vz += (3.0 + Math.random() * 5.5) * (0.45 + power);
+        p.vx *= 0.55;
+        p.vy *= 0.55;
+      }
+    }
+    S.status = 'shattered';
+  }
+
+  /* =======================================================================
+     Input — pinch / charge
+     ======================================================================= */
+  var RING_C = 2 * Math.PI * 54;
+
+  function ringSet(charge) {
+    ringArc.setAttribute('stroke-dashoffset', String(RING_C * (1 - charge)));
+    if (charge >= 0.999) ringWrap.classList.add('full');
+    else ringWrap.classList.remove('full');
+  }
+
+  function pinchDown(sx, sy, dt) {
+    if (!S.pinching) { S.pinching = true; S.charge = 0; }
+    S.charge = Math.min(1, S.charge + dt / 1.05);
+    ringWrap.style.transform = 'translate(' + sx.toFixed(1) + 'px,' + sy.toFixed(1) + 'px)';
+    ringWrap.classList.add('on');
+    ringSet(S.charge);
+    S.status = S.charge >= 0.999 ? 'charged' : 'charging';
+  }
+
+  function pinchUp() {
+    if (!S.pinching) return;
+    var power = S.charge;
+    S.pinching = false;
+    ringWrap.classList.remove('on');
+    ringWrap.classList.remove('full');
+    S.charge = 0;
+    ringSet(0);
+    if (power > 0.05 && S.mode !== 'explode') explode(power);
+  }
+
+  function pinchCancel() {
+    if (!S.pinching) return;
+    S.pinching = false;
+    S.charge = 0;
+    ringWrap.classList.remove('on');
+    ringWrap.classList.remove('full');
+    ringSet(0);
+  }
+
+  /* =======================================================================
+     Input — per-frame interpretation
+     ======================================================================= */
+  var now = 0;
+
+  function processHands(dt) {
+    var hands = S.handData;
+    var fresh = (now - S.lastHandT) < 0.5;
+
+    if (hands && hands.length && fresh) {
+      S.hands = hands.length;
+
+      if (hands.length >= 2) {
+        var a = hands[0], b = hands[1];
+        var pa = palmOf(a), pb = palmOf(b);
+        var sa = videoToScreen(pa.x, pa.y);
+        var sb = videoToScreen(pb.x, pb.y);
+
+        var span = Math.hypot(sa[0] - sb[0], sa[1] - sb[1]) / Math.min(W, H);
+        var t = clamp((span - 0.14) / (0.60 - 0.14), 0, 1);
+        S.radiusTarget = lerp(0.72, 2.55, t);
+
+        var mx = ((sa[0] + sb[0]) * 0.5) / W;
+        var my = ((sa[1] + sb[1]) * 0.5) / H;
+        S.posTarget[0] = (mx - 0.5) * 5.0;
+        S.posTarget[1] = -(my - 0.5) * 3.4;
+        S.posTarget[2] = 0;
+
+        var mid = { x: (pa.x + pb.x) * 0.5, y: (pa.y + pb.y) * 0.5 };
+        if (S.lastPalm) {
+          var dxm = (1 - mid.x) - S.lastPalm.x;
+          var dym = mid.y - S.lastPalm.y;
+          S.avY += dxm * 14;
+          S.avX += dym * 14;
+        }
+        S.lastPalm = { x: 1 - mid.x, y: mid.y };
+
+        pinchCancel();
+        S.status = 'two hands · ' + (t > 0.55 ? 'growing' : (t < 0.35 ? 'shrinking' : 'sizing'));
+      } else {
+        var lm = hands[0];
+        var palm = palmOf(lm);
+        var sp = videoToScreen(palm.x, palm.y);
+
+        S.posTarget[0] = (sp[0] / W - 0.5) * 8.0;
+        S.posTarget[1] = -(sp[1] / H - 0.5) * 4.7;
+        S.posTarget[2] = 0;
+
+        S.radiusTarget = R0;
+        if (S.lastPalm) {
+          var dx = (1 - palm.x) - S.lastPalm.x;
+          var dy = palm.y - S.lastPalm.y;
+          S.avY += dx * 30;
+          S.avX += dy * 30;
+        }
+        S.lastPalm = { x: 1 - palm.x, y: palm.y };
+
+        // pinch: thumb tip ↔ index tip, normalised by hand size
+        var handSize = d3(lm[0], lm[9]) || 0.1;
+        var ratio = d3(lm[4], lm[8]) / handSize;
+        var pinching = ratio < 0.42;
+
+        if (pinching) {
+          var p4 = videoToScreen(lm[4].x, lm[4].y);
+          var p8 = videoToScreen(lm[8].x, lm[8].y);
+          pinchDown((p4[0] + p8[0]) * 0.5, (p4[1] + p8[1]) * 0.5, dt);
+        } else {
+          pinchUp();
+          S.status = 'one hand';
+        }
+      }
+
+      var f = countFingers(hands[0]);
+      S.fingers = f;
+      S.hadHand = true;
+      if (S.mode === 'explode') S.status = 'shattered';
+
+    } else {
+      S.hands = 0;
+      S.lastPalm = null;
+      if (S.hadHand) {
+        // hand left the frame — drop the charge quietly, don't fire
+        S.hadHand = false;
+        pinchCancel();
+      }
+      S.radiusTarget = R0;
+      if (!S.pointerArmed) {
+        S.posTarget[0] = 0; S.posTarget[1] = 0; S.posTarget[2] = 0;
+      }
+      if (S.mode !== 'explode') {
+        S.status = S.camOn ? 'no hand detected' : (S.pointerArmed ? 'pointer mode' : 'idle');
+      }
+    }
+  }
+
+  function palmOf(lm) {
+    var ids = [0, 5, 9, 13, 17];
+    var x = 0, y = 0;
+    for (var i = 0; i < ids.length; i++) { x += lm[ids[i]].x; y += lm[ids[i]].y; }
+    return { x: x / ids.length, y: y / ids.length };
+  }
+
+  /* =======================================================================
+     Pointer fallback (works with or without a camera)
+     ======================================================================= */
+  function enablePointer() {
+    S.pointerActive = true;
+    if (!S.camOn) S.status = 'pointer mode';
+    if (S.pointerArmed) return;
+    S.pointerArmed = true;
+    document.addEventListener('pointermove', onPointerMove, { passive: true });
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('pointerup', onPointerUp);
+    document.addEventListener('pointercancel', onPointerUp);
+  }
+
+  function onPointerMove(e) {
+    if (e.target === camBtn || intro.contains(e.target)) return;
+    var x = e.clientX, y = e.clientY;
+    if (S.pointerActive && S.hands === 0) {
+      S.posTarget[0] = (x / W - 0.5) * 8.0;
+      S.posTarget[1] = -(y / H - 0.5) * 4.7;
+      S.avY += (x / W - S.pointer.x) * 26;
+      S.avX += (y / H - S.pointer.y) * 26;
+      S.pointer.x = x / W; S.pointer.y = y / H;
+      if (S.pointerDown) {
+        ringWrap.style.transform = 'translate(' + x + 'px,' + y + 'px)';
+      }
+    }
+  }
+
+  function onPointerDown(e) {
+    if (e.target === camBtn || intro.contains(e.target)) return;
+    if (S.hands > 0) return;
+    S.pointerDown = true;
+    pinchDown(e.clientX, e.clientY, 0);
+    S.pinching = true; S.charge = 0;
+    S.pointer.x = e.clientX / W; S.pointer.y = e.clientY / H;
+  }
+
+  function onPointerUp() {
+    if (!S.pointerDown) return;
+    S.pointerDown = false;
+    S.pinching = true; // make sure the release always resolves through pinchUp
+    pinchUp();
+  }
+
+  /* =======================================================================
+     Physics
+     ======================================================================= */
+  function updateParticles(t, dt) {
+    var R = S.radius;
+    var explodeUntil = S.explodeT + S.explodeDur;
+    if (S.mode === 'explode' && t > explodeUntil) {
+      S.mode = 'sphere';
+      S.status = 'reforming';
+      for (var j = 0; j < N; j++) { P[j].vx *= 0.32; P[j].vy *= 0.32; P[j].vz *= 0.32; }
+    }
+
+    // colour target from finger count (smooth between palette slots)
+    var fi = clamp(S.fingersF, 0, 5);
+    var i0 = Math.floor(fi), i1 = Math.min(5, i0 + 1), ff = fi - i0;
+    var tr = lerp(PALETTE[i0][0], PALETTE[i1][0], ff);
+    var tg = lerp(PALETTE[i0][1], PALETTE[i1][1], ff);
+    var tb = lerp(PALETTE[i0][2], PALETTE[i1][2], ff);
+
+    var compress = 1 - 0.17 * S.charge;
+    var exploding = S.mode === 'explode';
+    var drag = Math.pow(0.16, dt);
+    var cLerp = Math.min(1, dt * 5.5);
+
+    for (var i = 0; i < N; i++) {
+      var p = P[i];
+
+      if (exploding) {
+        p.px += p.vx * dt; p.py += p.vy * dt; p.pz += p.vz * dt;
+        p.vx *= drag; p.vy *= drag; p.vz *= drag;
+      } else {
+        var wob = 1 + Math.sin(t * 1.15 + p.ph) * 0.018;
+        var rr = R * p.rr * compress * wob;
+        var tx = p.dx * rr, ty = p.dy * rr, tz = p.dz * rr;
+
+        var k = 36, c = 9;
+        p.vx += ((tx - p.px) * k - p.vx * c) * dt;
+        p.vy += ((ty - p.py) * k - p.vy * c) * dt;
+        p.vz += ((tz - p.pz) * k - p.vz * c) * dt;
+        p.px += p.vx * dt; p.py += p.vy * dt; p.pz += p.vz * dt;
+      }
+
+      // per-particle brightness variation for depth
+      var b = 0.70 + p.seed * 0.66;
+      p.cr += (tr * b - p.cr) * cLerp;
+      p.cg += (tg * b - p.cg) * cLerp;
+      p.cb += (tb * b - p.cb) * cLerp;
+
+      posArr[i * 3] = p.px;
+      posArr[i * 3 + 1] = p.py;
+      posArr[i * 3 + 2] = p.pz;
+      colArr[i * 3] = p.cr;
+      colArr[i * 3 + 1] = p.cg;
+      colArr[i * 3 + 2] = p.cb;
+    }
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, posArr);
+    gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, colArr);
+  }
+
+  /* =======================================================================
+     Render
+     ======================================================================= */
+  function render() {
+    var c1 = Math.cos(S.yaw), s1 = Math.sin(S.yaw);
+    var c2 = Math.cos(S.pitch), s2 = Math.sin(S.pitch);
+
+    modelMat[0] = c1; modelMat[1] = 0; modelMat[2] = -s1; modelMat[3] = 0;
+    modelMat[4] = s1 * s2; modelMat[5] = c2; modelMat[6] = c1 * s2; modelMat[7] = 0;
+    modelMat[8] = s1 * c2; modelMat[9] = -s2; modelMat[10] = c1 * c2; modelMat[11] = 0;
+    modelMat[12] = S.pos[0]; modelMat[13] = S.pos[1]; modelMat[14] = S.pos[2]; modelMat[15] = 1;
+
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ONE, gl.ONE);
+    gl.disable(gl.DEPTH_TEST);
+
+    gl.uniformMatrix4fv(uModel, false, modelMat);
+    gl.uniformMatrix4fv(uView, false, viewMat);
+    gl.uniformMatrix4fv(uProj, false, projMat);
+    gl.uniform1f(uSizeScale, focal);
+
+    gl.drawArrays(gl.POINTS, 0, N);
+  }
+
+  /* =======================================================================
+     HUD
+     ======================================================================= */
+  var hHands = document.getElementById('hHands');
+  var hFingers = document.getElementById('hFingers');
+  var hCharge = document.getElementById('hCharge');
+  var hState = document.getElementById('hState');
+  var hudT = 0;
+
+  function updateHud(dt) {
+    hudT += dt;
+    if (hudT < 0.1) return;
+    hudT = 0;
+    hHands.textContent = String(S.hands);
+    hFingers.textContent = S.hands > 0 ? String(S.fingers) : '—';
+    hCharge.textContent = Math.round(S.charge * 100) + '%';
+    hState.textContent = S.status;
+  }
+
+  /* =======================================================================
+     Main loop
+     ======================================================================= */
+  var lastT = performance.now() / 1000;
+
+  // If the device can't hold a comfortable frame rate, step the render
+  // resolution down once rather than stuttering forever.
+  var slowT = 0, degraded = false;
+
+  function watchdog(dt) {
+    if (degraded) return;
+    slowT = dt > 0.026 ? slowT + dt : Math.max(0, slowT - dt * 0.5);
+    if (slowT > 1.6) {
+      degraded = true;
+      if (dprCap > 1) { dprCap = 1; resize(); }
+    }
+  }
+
+  function frame(ms) {
+    requestAnimationFrame(frame);
+    now = ms / 1000;
+    var dt = now - lastT;
+    lastT = now;
+    if (!isFinite(dt) || dt <= 0) dt = 1 / 60;
+    dt = Math.min(dt, 1 / 30);
+
+    // inertia
+    S.yaw += (S.avY + 0.10) * dt;
+    S.pitch = clamp(S.pitch + S.avX * dt, -1.25, 1.25);
+    var damp = Math.pow(0.06, dt);
+    S.avY *= damp; S.avX *= damp;
+
+    processHands(dt);
+
+    // smoothing
+    var ease = Math.min(1, dt * 9);
+    S.radius += (S.radiusTarget - S.radius) * Math.min(1, dt * 6.5);
+    S.pos[0] += (S.posTarget[0] - S.pos[0]) * ease;
+    S.pos[1] += (S.posTarget[1] - S.pos[1]) * ease;
+    S.pos[2] += (S.posTarget[2] - S.pos[2]) * ease;
+    S.fingersF += (S.fingers - S.fingersF) * Math.min(1, dt * 4);
+
+    // pointer charging advances even when no hand is present
+    if (S.pointerDown) {
+      S.charge = Math.min(1, S.charge + dt / 1.05);
+      ringSet(S.charge);
+      S.status = S.charge >= 0.999 ? 'charged' : 'charging';
+    }
+
+    updateParticles(now, dt);
+    render();
+    updateHud(dt);
+    watchdog(dt);
+
+    if (!hints.classList.contains('fade') && now - S.startT > 16) hints.classList.add('fade');
+  }
+
+  /* =======================================================================
+     Camera + MediaPipe Hands
+     ======================================================================= */
+  var hands = null;
+  var resultSeq = 0;
+  var sentSeq = -1;
+  var lastSendT = 0;
+
+  // MediaPipe gets a small copy of the frame, not the full video: inference cost
+  // scales with pixels and a 1280x720 feed jams the main thread on slow machines.
+  var CAP_W = 320;
+  var capCanvas = document.createElement('canvas');
+  var capCtx = capCanvas.getContext('2d');
+
+  function pump() {
+    if (!S.camOn) return;
+    var t = performance.now();
+    var vw = video.videoWidth, vh = video.videoHeight;
+    // never send a new frame until the tracker has answered the previous one,
+    // and never faster than ~18fps — otherwise the graph queues and the
+    // main thread stalls.
+    if (hands && video.readyState >= 2 && vw && vh &&
+        resultSeq !== sentSeq && (t - lastSendT) > 55) {
+      var ch = Math.round(CAP_W * vh / vw);
+      if (capCanvas.width !== CAP_W || capCanvas.height !== ch) {
+        capCanvas.width = CAP_W;
+        capCanvas.height = ch;
+      }
+      try {
+        capCtx.drawImage(video, 0, 0, capCanvas.width, capCanvas.height);
+        sentSeq = resultSeq;
+        lastSendT = t;
+        var pr = hands.send({ image: capCanvas });
+        if (pr && pr.catch) pr.catch(function () {});
+      } catch (e) { /* drop this frame */ }
+    }
+    setTimeout(pump, 30);
+  }
+
+  function onResults(res) {
+    resultSeq++;
+    if (res && res.multiHandLandmarks && res.multiHandLandmarks.length) {
+      S.handData = res.multiHandLandmarks;
+      S.lastHandT = performance.now() / 1000;
+    } else {
+      S.handData = null;
+      S.lastHandT = -10;
+    }
+  }
+
+  function startCamera() {
+    return new Promise(function (resolve, reject) {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        reject(new Error('no getUserMedia'));
+        return;
+      }
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false
+      }).then(function (stream) {
+        video.srcObject = stream;
+        var p = video.play();
+        var ready = function () {
+          if (typeof window.Hands === 'undefined') {
+            reject(new Error('MediaPipe unavailable'));
+            return;
+          }
+          try {
+            hands = new window.Hands({
+              locateFile: function (f) {
+                return 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/' + f;
+              }
+            });
+            hands.setOptions({
+              maxNumHands: 2,
+              modelComplexity: 0,
+              minDetectionConfidence: 0.6,
+              minTrackingConfidence: 0.6
+            });
+            hands.onResults(onResults);
+          } catch (e) {
+            reject(e);
+            return;
+          }
+          S.camOn = true;
+          camBtn.disabled = false;
+          S.status = 'show your hand';
+          pump();
+          resolve();
+        };
+        if (p && p.then) p.then(ready, ready); else ready();
+      }).catch(reject);
+    });
+  }
+
+  /* =======================================================================
+     UI wiring
+     ======================================================================= */
+  function setCamBg(on) {
+    S.camBg = on;
+    document.body.classList.toggle('cambg', on);
+    camBtnLabel.textContent = on ? 'Background on' : 'Webcam background';
+  }
+
+  camBtn.addEventListener('click', function () {
+    if (!S.camOn) return;
+    setCamBg(!S.camBg);
+  });
+
+  document.getElementById('startBtn').addEventListener('click', function () {
+    intro.classList.add('hidden');
+    S.startT = performance.now() / 1000;
+    toast('Requesting camera…');
+    startCamera().then(function () {
+      toast('Camera live — hold up your hand');
+    }).catch(function () {
+      toast('Camera unavailable — using pointer');
+      enablePointer();
+      S.status = 'pointer mode';
+    });
+  });
+
+  document.getElementById('skipBtn').addEventListener('click', function () {
+    intro.classList.add('hidden');
+    S.startT = performance.now() / 1000;
+    enablePointer();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'c' || e.key === 'C') { if (S.camOn) setCamBg(!S.camBg); }
+    if (e.code === 'Space') {
+      e.preventDefault();
+      if (S.mode !== 'explode') explode(0.85);
+    }
+  });
+
+  // pointer mode is always armed, so the sphere responds even if the camera is denied
+  enablePointer();
+  ringSet(0);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
